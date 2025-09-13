@@ -260,7 +260,7 @@ if (
             st.session_state.history.append(([row[:] for row in st.session_state.board], cur))
             st.session_state.board = apply_move(st.session_state.board, mv, cur)
             st.session_state.player = opponent(cur)
-            st.experimental_rerun()  # immediately reflect CPU move
+            st.rerun()  # immediately reflect CPU move
 
 # Footer
 st.caption("Built with Streamlit. Othello rules: capture lines by enclosing opponent discs.")
