@@ -1,1 +1,9 @@
-fileWatcherType = "poll"   # auto/watchdog/poll のうち poll を指定
+# .streamlit/config.toml
+[server]
+# inotify制限回避（watchdog→poll）
+fileWatcherType = "poll"
+
+#（任意）Cloud向け: 自動リロード
+runOnSave = true
+headless   = true
+
