@@ -32,13 +32,21 @@ TARGET_SIZE = (200, 150)
 # -------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def _load_model_once():
+    if not MODEL_PATH.exists():
+        return None
+    # 試行1: tf.keras（古いH5互換に強い）/ コンパイルなし
     try:
-        if not MODEL_PATH.exists():
-            return None
-        from tensorflow.keras.models import load_model  # type: ignore
-        return load_model(str(MODEL_PATH))
+        from tensorflow.keras.models import load_model as tf_load_model
+        return tf_load_model(str(MODEL_PATH), compile=False)
+    except Exception:
+        pass
+    # 試行2: keras.saving（Keras 3の推奨API）/ 安全モード解除
+    try:
+        import keras
+        return keras.saving.load_model(str(MODEL_PATH), compile=False, safe_mode=False)
     except Exception:
         return None
+
 
 def _load_labels():
     if LABELS_PATH.exists():
