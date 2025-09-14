@@ -44,39 +44,50 @@ def _is_hdf5_file(path: Path) -> bool:
             return f.read(4) == b"\x89HDF"
     except Exception:
         return False
+
+# よくあるカスタム名の救済（必要に応じて追加）
+def _common_custom_objects():
+    try:
+        import tensorflow as tf
+        from tensorflow.keras.layers import LeakyReLU
+        return {
+            "swish": tf.nn.swish,
+            "relu6": tf.nn.relu6,
+            "LeakyReLU": LeakyReLU,
+        }
+    except Exception:
+        return {}
+
 # -------------------------------------------------
 # 高速化モデル読込
 # -------------------------------------------------
-# これで _load_model_once を置換
 @st.cache_resource(show_spinner=False)
 def _load_model_once():
     if not MODEL_PATH.exists():
         return None
 
-    # SavedModel ディレクトリだった場合の分岐（拡張: ディレクトリかつ assets/variables があるなど）
-    if MODEL_PATH.is_dir():
-        try:
-            from tensorflow.keras.models import load_model as tf_load_model
-            return tf_load_model(str(MODEL_PATH), compile=False)
-        except Exception as e:
-            _record_model_error(e)
-
-    # 1) まず tf.keras（古いH5互換に強い）
+    # 1) tf.keras のローダ（古いH5互換に強い）
     try:
         from tensorflow.keras.models import load_model as tf_load_model
         return tf_load_model(str(MODEL_PATH), compile=False)
     except Exception as e1:
         _record_model_error(e1)
 
-    # 2) 次に Keras 3 推奨API（safe_mode=False でカスタム/ラムダ許容）
+    # 2) tf.keras + よくある custom_objects（活性化・LeakyReLU など）
     try:
-        import keras
-        return keras.saving.load_model(str(MODEL_PATH), compile=False, safe_mode=False)
+        from tensorflow.keras.models import load_model as tf_load_model
+        return tf_load_model(str(MODEL_PATH), compile=False, custom_objects=_common_custom_objects())
     except Exception as e2:
         _record_model_error(e2)
 
-    return None
+    # 3) Keras 3 推奨API（安全モードOFFで Lambda/カスタム許可）
+    try:
+        import keras
+        return keras.saving.load_model(str(MODEL_PATH), compile=False, safe_mode=False)
+    except Exception as e3:
+        _record_model_error(e3)
 
+    return None
 
 def _load_labels():
     if LABELS_PATH.exists():
@@ -278,5 +289,15 @@ with st.sidebar:
             st.write("last error:", st.session_state["model_load_error"])
         if "model_load_trace" in st.session_state:
             st.code(st.session_state["model_load_trace"])
+            
+    with st.expander("Diagnostics (model loader)", expanded=False):
+    st.write("MODEL_PATH:", str(MODEL_PATH))
+    st.write("exists:", MODEL_PATH.exists(), "| is_dir:", MODEL_PATH.is_dir())
+    st.write("seems_hdf5:", _is_hdf5_file(MODEL_PATH))
+    st.write("loadable (cache):", _load_model_once() is not None)
+    if "model_load_error" in st.session_state:
+        st.write("last error:", st.session_state["model_load_error"])
+    if "model_load_trace" in st.session_state:
+        st.code(st.session_state["model_load_trace"])
 
 PAGES[choice]()
