@@ -190,5 +190,44 @@ with st.sidebar:
     st.title("NyanCheck")
     choice = st.radio("ページを選択", list(PAGES.keys()))
     st.markdown(f"**Upload dir**: `{UPLOAD_DIR}`")
-    st.caption("モデル: " + ("OK" if _load_model_once() else "未検出"))
+
+    # 現在のモデル状態を表示
+    _m = None
+    try:
+        _m = _load_model_once()
+    except Exception:
+        _m = None
+    st.caption("モデル: " + ("OK" if _m else "未検出"))
+
+    # 一時診断（トラブル時にだけ開けばOK）
+    st.divider()
+    with st.expander("Diagnostics (一時表示)"):
+        st.write("**MODEL_PATH**:", str(MODEL_PATH))
+        st.write("exists:", MODEL_PATH.exists())
+        st.write("parent exists:", MODEL_PATH.parent.exists())
+
+        try:
+            st.write("loadable (cache):", _m is not None)
+        except Exception as e:
+            st.write("loadable: False")
+            st.exception(e)
+
+        # predict.py の有無
+        st.write("predict.py available:", predict is not None)
+
+        # TensorFlow の存在確認（任意）
+        try:
+            import tensorflow as tf  # 重いので診断の中で遅延 import
+            st.write("tensorflow:", tf.__version__)
+        except Exception as e:
+            st.write("tensorflow import error:", e)
+
+        # results/ の中身を確認（空ならファイル未配置の可能性）
+        try:
+            from pathlib import Path as _Path
+            files = [str(p) for p in _Path(MODEL_PATH.parent).glob("*")]
+            st.write("results/ files:", files if files else "(empty)")
+        except Exception as e:
+            st.write("list error:", e)
+
 PAGES[choice]()
