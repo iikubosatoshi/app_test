@@ -123,12 +123,12 @@ def page_check():
                     else:
                         rows.append({"filename": p.name, "label": "dummy_label"})
         df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
         st.subheader("プレビュー")
         cols = st.columns(3)
         for i, f in enumerate(uploaded_files):
             with cols[i % 3]:
-                st.image(f, caption=f.name, use_container_width=True)
+                st.image(f, caption=f.name, width="stretch")
 
 # ===============================
 # Select Image ページ
@@ -178,7 +178,7 @@ def page_select_image():
         cols = st.columns(5)
         for i, p in enumerate(selected_paths):
             with cols[i % 5]:
-                st.image(str(p), caption=p.name, use_container_width=True)
+                st.image(str(p), caption=p.name, width="stretch")
                 if labels:
                     st.caption(f"label: {labels[i]}")
 
