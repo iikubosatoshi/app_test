@@ -1,6 +1,7 @@
+# requirements.txt
 streamlit==1.49.1
 pandas==2.3.2
-numpy==1.26.4        # TF 2.12 と相性のよい上限
+numpy==1.24.3          # ← ここがポイント（TF2.12の上限に合わせる）
 Pillow==11.0.0
 tensorflow-cpu==2.12.1
 h5py==3.10.0
