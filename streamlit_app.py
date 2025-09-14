@@ -1,3 +1,7 @@
+# 先頭付近の import よりも前が理想（INFO抑制）
+import os as _os
+_os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
 import streamlit as st
 import os
 import io
@@ -27,25 +31,51 @@ MODEL_PATH = Path("results/nyancheck.h5").resolve()
 LABELS_PATH = Path("results/labels.txt").resolve()
 TARGET_SIZE = (200, 150)
 
+# これをファイル内のどこか（_load_model_once の直前が分かりやすい）に追加
+def _record_model_error(e: Exception):
+    import traceback
+    # 例外情報をセッションに保存（サイドバーで見られる）
+    st.session_state["model_load_error"] = repr(e)
+    st.session_state["model_load_trace"] = traceback.format_exc()
+
+def _is_hdf5_file(path: Path) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) == b"\x89HDF"
+    except Exception:
+        return False
 # -------------------------------------------------
 # 高速化モデル読込
 # -------------------------------------------------
+# これで _load_model_once を置換
 @st.cache_resource(show_spinner=False)
 def _load_model_once():
     if not MODEL_PATH.exists():
         return None
-    # 試行1: tf.keras（古いH5互換に強い）/ コンパイルなし
+
+    # SavedModel ディレクトリだった場合の分岐（拡張: ディレクトリかつ assets/variables があるなど）
+    if MODEL_PATH.is_dir():
+        try:
+            from tensorflow.keras.models import load_model as tf_load_model
+            return tf_load_model(str(MODEL_PATH), compile=False)
+        except Exception as e:
+            _record_model_error(e)
+
+    # 1) まず tf.keras（古いH5互換に強い）
     try:
         from tensorflow.keras.models import load_model as tf_load_model
         return tf_load_model(str(MODEL_PATH), compile=False)
-    except Exception:
-        pass
-    # 試行2: keras.saving（Keras 3の推奨API）/ 安全モード解除
+    except Exception as e1:
+        _record_model_error(e1)
+
+    # 2) 次に Keras 3 推奨API（safe_mode=False でカスタム/ラムダ許容）
     try:
         import keras
         return keras.saving.load_model(str(MODEL_PATH), compile=False, safe_mode=False)
-    except Exception:
-        return None
+    except Exception as e2:
+        _record_model_error(e2)
+
+    return None
 
 
 def _load_labels():
@@ -237,5 +267,16 @@ with st.sidebar:
             st.write("results/ files:", files if files else "(empty)")
         except Exception as e:
             st.write("list error:", e)
+
+    st.divider()
+    with st.expander("Diagnostics (model loader)", expanded=False):
+        st.write("MODEL_PATH:", str(MODEL_PATH))
+        st.write("exists:", MODEL_PATH.exists(), "| is_dir:", MODEL_PATH.is_dir())
+        st.write("seems_hdf5:", _is_hdf5_file(MODEL_PATH))
+        st.write("loadable (cache):", _load_model_once() is not None)
+        if "model_load_error" in st.session_state:
+            st.write("last error:", st.session_state["model_load_error"])
+        if "model_load_trace" in st.session_state:
+            st.code(st.session_state["model_load_trace"])
 
 PAGES[choice]()
