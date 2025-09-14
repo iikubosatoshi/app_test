@@ -1,266 +1,194 @@
-from __future__ import annotations
-import random
-from dataclasses import dataclass
-from typing import List, Tuple, Optional
-
 import streamlit as st
+import os
+import io
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from PIL import Image
 
-# -----------------------------------------------------------------------------
-# Streamlit page config
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="Othello (Reversi) - Streamlit", page_icon="♟️", layout="centered")
+st.set_page_config(page_title="NyanCheck", page_icon="🐾", layout="wide")
 
-# -----------------------------------------------------------------------------
-# Constants
-# -----------------------------------------------------------------------------
-EMPTY = 0
-BLACK = 1   # Black goes first
-WHITE = -1
-DIRS = [
-    (-1, -1), (-1, 0), (-1, 1),
-    (0, -1),          (0, 1),
-    (1, -1),  (1, 0), (1, 1),
-]
+# -------------------------------------------------
+# predict.py & selectimage.py 読み込み
+# -------------------------------------------------
+try:
+    from predict import predict  # 提供ファイル
+except Exception:
+    predict = None
 
-# Positional weights (classic heuristic)
-WEIGHTS = [
-    [120, -20,  20,  5,  5, 20, -20, 120],
-    [-20, -40, -5, -5, -5, -5, -40, -20],
-    [ 20,  -5, 15,  3,  3, 15,  -5,  20],
-    [  5,  -5,  3,  3,  3,  3,  -5,   5],
-    [  5,  -5,  3,  3,  3,  3,  -5,   5],
-    [ 20,  -5, 15,  3,  3, 15,  -5,  20],
-    [-20, -40, -5, -5, -5, -5, -40, -20],
-    [120, -20, 20,  5,  5, 20, -20, 120],
-]
+try:
+    from selectimage import randomselect
+except Exception:
+    randomselect = None
 
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-Board = List[List[int]]
-Move = Tuple[int, int]
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "./uploads")).resolve()
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_PATH = Path("results/nyancheck.h5").resolve()
+LABELS_PATH = Path("results/labels.txt").resolve()
+TARGET_SIZE = (200, 150)
 
-
-def new_board() -> Board:
-    b = [[EMPTY for _ in range(8)] for _ in range(8)]
-    b[3][3] = WHITE
-    b[3][4] = BLACK
-    b[4][3] = BLACK
-    b[4][4] = WHITE
-    return b
-
-
-def in_bounds(r: int, c: int) -> bool:
-    return 0 <= r < 8 and 0 <= c < 8
-
-
-def opponent(p: int) -> int:
-    return -p
-
-
-def find_flips(board: Board, r: int, c: int, p: int) -> List[Move]:
-    """Return list of discs to flip if (r,c) is played by p; empty if invalid."""
-    if board[r][c] != EMPTY:
-        return []
-    flips: List[Move] = []
-    for dr, dc in DIRS:
-        path: List[Move] = []
-        rr, cc = r + dr, c + dc
-        while in_bounds(rr, cc) and board[rr][cc] == opponent(p):
-            path.append((rr, cc))
-            rr += dr
-            cc += dc
-        if in_bounds(rr, cc) and board[rr][cc] == p and path:
-            flips.extend(path)
-    return flips
-
-
-def valid_moves(board: Board, p: int) -> List[Move]:
-    moves: List[Move] = []
-    for r in range(8):
-        for c in range(8):
-            if find_flips(board, r, c, p):
-                moves.append((r, c))
-    return moves
-
-
-def apply_move(board: Board, move: Move, p: int) -> Board:
-    r, c = move
-    flips = find_flips(board, r, c, p)
-    if not flips:
-        return board
-    nb = [row[:] for row in board]
-    nb[r][c] = p
-    for rr, cc in flips:
-        nb[rr][cc] = p
-    return nb
-
-
-def score(board: Board) -> Tuple[int, int]:
-    b = sum(cell == BLACK for row in board for cell in row)
-    w = sum(cell == WHITE for row in board for cell in row)
-    return b, w
-
-
-def game_over(board: Board) -> bool:
-    return not valid_moves(board, BLACK) and not valid_moves(board, WHITE)
-
-
-# -----------------------------------------------------------------------------
-# Simple AI
-# -----------------------------------------------------------------------------
-
-def evaluate_move(board: Board, move: Move, p: int) -> int:
-    # combine flips count and positional weight
-    r, c = move
-    flips = len(find_flips(board, r, c, p))
-    posw = WEIGHTS[r][c]
-    return flips * 10 + posw
-
-
-def ai_pick_move(board: Board, p: int, level: str = "Normal") -> Optional[Move]:
-    moves = valid_moves(board, p)
-    if not moves:
+# -------------------------------------------------
+# 高速化モデル読込
+# -------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def _load_model_once():
+    try:
+        if not MODEL_PATH.exists():
+            return None
+        from tensorflow.keras.models import load_model  # type: ignore
+        return load_model(str(MODEL_PATH))
+    except Exception:
         return None
-    if level == "Easy":
-        return random.choice(moves)
-    # Normal/Hard: pick by heuristic; Hard gives extra bias to safe corners/edges
-    scored = []
-    for m in moves:
-        val = evaluate_move(board, m, p)
-        if level == "Hard":
-            r, c = m
-            # Encourage corners a lot, avoid X-squares next to corners
-            if (r, c) in [(0, 0), (0, 7), (7, 0), (7, 7)]:
-                val += 200
-            if (r, c) in [(1, 1), (1, 6), (6, 1), (6, 6)]:
-                val -= 50
-        scored.append((val, m))
-    scored.sort(reverse=True, key=lambda x: x[0])
-    return scored[0][1]
 
+def _load_labels():
+    if LABELS_PATH.exists():
+        with open(LABELS_PATH, "r", encoding="utf-8") as f:
+            return [ln.strip() for ln in f if ln.strip()]
+    return None
 
-# -----------------------------------------------------------------------------
-# Session state
-# -----------------------------------------------------------------------------
-if "board" not in st.session_state:
-    st.session_state.board = new_board()
-    st.session_state.player = BLACK
-    st.session_state.history: List[Tuple[Board, int]] = []  # (board, player)
-    st.session_state.human_color = BLACK  # by default human plays black
-    st.session_state.mode = "Human vs CPU"
-    st.session_state.level = "Normal"
+def _preprocess_pil(img: Image.Image) -> np.ndarray:
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    img = img.resize(TARGET_SIZE, Image.BILINEAR)
+    arr = np.asarray(img, dtype=np.float32) / 255.0
+    return arr
 
+def _predict_fast_batch(paths: list[Path]) -> list[str]:
+    model = _load_model_once()
+    if model is None:
+        raise RuntimeError("Model not available")
+    arrays, valid_idx = [], []
+    for i, p in enumerate(paths):
+        try:
+            img = Image.open(p)
+            arr = _preprocess_pil(img)
+            arrays.append(arr)
+            valid_idx.append(i)
+        except Exception:
+            arrays.append(None)
+    batch = np.stack([a for a in arrays if a is not None], axis=0)
+    preds = model.predict(batch, verbose=0)
+    idxs = preds.argmax(axis=1) if preds.ndim == 2 else np.zeros((preds.shape[0],), dtype=np.int64)
+    label_table = _load_labels()
+    mapped = [label_table[i] if label_table and 0 <= i < len(label_table) else str(i) for i in idxs]
+    out = ["?"] * len(paths)
+    j = 0
+    for i in range(len(paths)):
+        if i in valid_idx:
+            out[i] = mapped[j]
+            j += 1
+    return out
 
-# -----------------------------------------------------------------------------
-# Sidebar controls
-# -----------------------------------------------------------------------------
-st.sidebar.title("Othello / Reversi")
-st.sidebar.caption("Streamlit example game. Black moves first.")
+# ===============================
+# Check ページ
+# ===============================
 
-st.session_state.mode = st.sidebar.selectbox("対戦モード", ["Human vs CPU", "Human vs Human"], index=0)
-if st.session_state.mode == "Human vs CPU":
-    st.session_state.human_color = BLACK if st.sidebar.radio("あなたの色", ["Black", "White"], index=0) == "Black" else WHITE
-    st.session_state.level = st.sidebar.select_slider("CPUレベル", options=["Easy", "Normal", "Hard"], value=st.session_state.level)
+def page_check():
+    st.header("Check（画像推論）")
+    with st.form(key="check_form"):
+        uploaded_files = st.file_uploader("画像をアップロード（複数可）", type=["png","jpg","jpeg","webp"], accept_multiple_files=True)
+        save_to_uploads = st.checkbox("/uploads に保存する", value=True)
+        use_fast = st.checkbox("高速モード", value=True)
+        submitted = st.form_submit_button("推論を実行")
 
-col_a, col_b, col_c = st.sidebar.columns(3)
-if col_a.button("⟲ Undo"):
-    if st.session_state.history:
-        st.session_state.board, st.session_state.player = st.session_state.history.pop()
+    if submitted and uploaded_files:
+        file_paths = []
+        for uf in uploaded_files:
+            dst = UPLOAD_DIR / uf.name
+            dst.write_bytes(uf.getvalue())
+            file_paths.append(dst)
 
-if col_b.button("⟲ 2手戻す"):
-    for _ in range(2):
-        if st.session_state.history:
-            st.session_state.board, st.session_state.player = st.session_state.history.pop()
+        rows = []
+        with st.spinner("推論中..."):
+            fast_available = use_fast and (_load_model_once() is not None)
+            if fast_available:
+                try:
+                    labels = _predict_fast_batch(file_paths)
+                    for p, lb in zip(file_paths, labels):
+                        rows.append({"filename": p.name, "label": lb, "mode": "fast"})
+                except Exception as e:
+                    st.info(f"高速モード失敗: {e}")
+                    fast_available = False
+            if not fast_available:
+                for p in file_paths:
+                    if predict is not None:
+                        try:
+                            try:
+                                out = predict(p.name)
+                            except Exception:
+                                out = predict(str(p))
+                            rows.append({"filename": p.name, "label": out, "mode": "fallback"})
+                        except Exception as e:
+                            rows.append({"filename": p.name, "label": None, "error": str(e)})
+                    else:
+                        rows.append({"filename": p.name, "label": "dummy_label"})
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True)
+        st.subheader("プレビュー")
+        cols = st.columns(3)
+        for i, f in enumerate(uploaded_files):
+            with cols[i % 3]:
+                st.image(f, caption=f.name, use_container_width=True)
 
-if col_c.button("🆕 New Game"):
-    st.session_state.board = new_board()
-    st.session_state.player = BLACK
-    st.session_state.history.clear()
+# ===============================
+# Select Image ページ
+# ===============================
 
-show_valid = st.sidebar.checkbox("合法手のヒントを表示", value=True)
+def page_select_image():
+    st.header("Select Image（ランダム選択 + 推論）")
+    num = st.number_input("選択する画像枚数", min_value=1, max_value=50, value=10)
+    with st.form("select_form"):
+        do_predict = st.checkbox("選んだ画像も推論する", value=True)
+        use_fast = st.checkbox("高速モード", value=True)
+        run = st.form_submit_button("ランダム選択")
 
-# -----------------------------------------------------------------------------
-# Header & status
-# -----------------------------------------------------------------------------
-st.title("♟️ Othello (Reversi)")
+    if run:
+        imgs = [p for p in UPLOAD_DIR.glob("**/*") if p.suffix.lower() in (".png",".jpg",".jpeg",".webp")]
+        if randomselect is not None:
+            try:
+                selected_paths = [Path(p) for p in randomselect(str(UPLOAD_DIR), int(num))]
+            except Exception:
+                selected_paths = imgs[:int(num)]
+        else:
+            selected_paths = imgs[:int(num)]
 
-b_cnt, w_cnt = score(st.session_state.board)
-turn_str = "Black" if st.session_state.player == BLACK else "White"
-st.write(f"**Turn: {turn_str}**  |  ⚫ {b_cnt} - ⚪ {w_cnt}")
+        labels = None
+        if do_predict:
+            fast_available = use_fast and (_load_model_once() is not None)
+            try:
+                if fast_available:
+                    labels = _predict_fast_batch(selected_paths)
+                else:
+                    labels = []
+                    for p in selected_paths:
+                        if predict is not None:
+                            try:
+                                try:
+                                    out = predict(p.name)
+                                except Exception:
+                                    out = predict(str(p))
+                                labels.append(str(out))
+                            except Exception:
+                                labels.append("?")
+                        else:
+                            labels.append("dummy_label")
+            except Exception:
+                labels = ["?"] * len(selected_paths)
 
-# -----------------------------------------------------------------------------
-# Board rendering
-# -----------------------------------------------------------------------------
+        cols = st.columns(5)
+        for i, p in enumerate(selected_paths):
+            with cols[i % 5]:
+                st.image(str(p), caption=p.name, use_container_width=True)
+                if labels:
+                    st.caption(f"label: {labels[i]}")
 
-def piece_emoji(cell: int) -> str:
-    if cell == BLACK:
-        return "⚫"
-    if cell == WHITE:
-        return "⚪"
-    return "🟩"  # empty square
-
-
-valid = set(valid_moves(st.session_state.board, st.session_state.player))
-
-
-def make_move(r: int, c: int):
-    board = st.session_state.board
-    p = st.session_state.player
-    flips = find_flips(board, r, c, p)
-    if not flips:
-        return
-    # push history
-    st.session_state.history.append(([row[:] for row in board], p))
-    st.session_state.board = apply_move(board, (r, c), p)
-    st.session_state.player = opponent(p)
-
-
-# Grid (8x8)
-for r in range(8):
-    cols = st.columns(8, gap="small")
-    for c in range(8):
-        label = piece_emoji(st.session_state.board[r][c])
-        if show_valid and (r, c) in valid and st.session_state.board[r][c] == EMPTY:
-            label = "🟢"  # hint for valid move
-        # Each square is a button; clicking attempts a move for current player
-        if cols[c].button(label, key=f"sq_{r}_{c}"):
-            make_move(r, c)
-
-# -----------------------------------------------------------------------------
-# Turn management & CPU move
-# -----------------------------------------------------------------------------
-cur = st.session_state.player
-if game_over(st.session_state.board):
-    b_cnt, w_cnt = score(st.session_state.board)
-    if b_cnt > w_cnt:
-        st.success(f"Game Over! Winner: Black  ({b_cnt} - {w_cnt})")
-    elif w_cnt > b_cnt:
-        st.success(f"Game Over! Winner: White  ({w_cnt} - {b_cnt})")
-    else:
-        st.info(f"Game Over! Draw  ({b_cnt} - {w_cnt})")
-else:
-    # If no legal moves, pass
-    if not valid_moves(st.session_state.board, cur):
-        st.info(f"{ 'Black' if cur == BLACK else 'White' } has no legal moves. Pass.")
-        st.session_state.player = opponent(cur)
-
-# CPU turn (after handling pass)
-cur = st.session_state.player
-if (
-    st.session_state.mode == "Human vs CPU"
-    and not game_over(st.session_state.board)
-    and ((st.session_state.human_color == BLACK and cur == WHITE) or (st.session_state.human_color == WHITE and cur == BLACK))
-):
-    moves = valid_moves(st.session_state.board, cur)
-    if moves:
-        mv = ai_pick_move(st.session_state.board, cur, level=st.session_state.level)
-        if mv is not None:
-            # save history
-            st.session_state.history.append(([row[:] for row in st.session_state.board], cur))
-            st.session_state.board = apply_move(st.session_state.board, mv, cur)
-            st.session_state.player = opponent(cur)
-            st.rerun()  # immediately reflect CPU move
-
-# Footer
-st.caption("Built with Streamlit. Othello rules: capture lines by enclosing opponent discs.")
+# ===============================
+# ページ切替
+# ===============================
+PAGES = {"Check": page_check, "Select Image": page_select_image}
+with st.sidebar:
+    st.title("NyanCheck")
+    choice = st.radio("ページを選択", list(PAGES.keys()))
+    st.markdown(f"**Upload dir**: `{UPLOAD_DIR}`")
+    st.caption("モデル: " + ("OK" if _load_model_once() else "未検出"))
+PAGES[choice]()
