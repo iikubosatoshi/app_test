@@ -291,13 +291,13 @@ with st.sidebar:
             st.code(st.session_state["model_load_trace"])
             
     with st.expander("Diagnostics (model loader)", expanded=False):
-    st.write("MODEL_PATH:", str(MODEL_PATH))
-    st.write("exists:", MODEL_PATH.exists(), "| is_dir:", MODEL_PATH.is_dir())
-    st.write("seems_hdf5:", _is_hdf5_file(MODEL_PATH))
-    st.write("loadable (cache):", _load_model_once() is not None)
-    if "model_load_error" in st.session_state:
-        st.write("last error:", st.session_state["model_load_error"])
-    if "model_load_trace" in st.session_state:
-        st.code(st.session_state["model_load_trace"])
+        st.write("MODEL_PATH:", str(MODEL_PATH))
+        st.write("exists:", MODEL_PATH.exists(), "| is_dir:", MODEL_PATH.is_dir())
+        st.write("seems_hdf5:", _is_hdf5_file(MODEL_PATH))
+        st.write("loadable (cache):", _load_model_once() is not None)
+        if "model_load_error" in st.session_state:
+            st.write("last error:", st.session_state["model_load_error"])
+        if "model_load_trace" in st.session_state:
+            st.code(st.session_state["model_load_trace"])
 
 PAGES[choice]()
