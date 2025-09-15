@@ -1,7 +1,3 @@
-# 先頭付近の import よりも前が理想（INFO抑制）
-import os as _os
-_os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-
 import streamlit as st
 import os
 import io
@@ -9,6 +5,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from PIL import Image
+import random
 
 st.set_page_config(page_title="NyanCheck", page_icon="🐾", layout="wide")
 
@@ -27,67 +24,93 @@ except Exception:
 
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "./uploads")).resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+VALIDATION_DIR = Path(os.environ.get("VALIDATION_DIR", "./validation_data")).resolve()
 MODEL_PATH = Path("results/nyancheck.h5").resolve()
 LABELS_PATH = Path("results/labels.txt").resolve()
 TARGET_SIZE = (200, 150)
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
-# これをファイル内のどこか（_load_model_once の直前が分かりやすい）に追加
-def _record_model_error(e: Exception):
-    import traceback
-    # 例外情報をセッションに保存（サイドバーで見られる）
-    st.session_state["model_load_error"] = repr(e)
-    st.session_state["model_load_trace"] = traceback.format_exc()
+def allowed_file(name: str) -> bool:
+    return Path(name).suffix.lower() in ALLOWED_EXTENSIONS
 
-def _is_hdf5_file(path: Path) -> bool:
+# -------------------------------------------------
+# Flask版 check.py のロジックを支える補助（ラベル・クイズ生成）
+# -------------------------------------------------
+DEFAULT_CLASSES = [
+    "アビシニアン", "犬", "エジプシャンマウ", "メインクーン",
+    "ノルウェージャンフォレストキャット", "ロシアンブルー",
+    "アメリカンショートヘアー", "日本猫",
+]
+
+def _answer_choices() -> list[str]:
+    labels = _load_labels()
+    return labels if labels else DEFAULT_CLASSES
+
+def _infer_label_from_filename(filename: str, choices: list[str]) -> str | None:
+    # ファイル名に含まれていれば優先
+    for c in choices:
+        if c and c in filename:
+            return c
+    # ディレクトリ名にも含まれていないかチェック
+    parts = Path(filename).parts
+    for c in choices:
+        if any(c in p for p in parts):
+            return c
+    return None
+
+def _make_quiz_df(k: int = 8) -> pd.DataFrame:
+    """validation_data/<class>/* から優先的に抽出。無ければ /uploads から抽出。
+    返り値: filename, path, 猫の種類
+    """
+    # 1) validation_data を最優先（ディレクトリ名=正解ラベル）
+    items: list[tuple[Path, str]] = []
     try:
-        with open(path, "rb") as f:
-            return f.read(4) == b"\x89HDF"
+        if VALIDATION_DIR.exists():
+            for cls_dir in sorted([d for d in VALIDATION_DIR.iterdir() if d.is_dir()]):
+                cls = cls_dir.name
+                for p in cls_dir.rglob("*"):
+                    if p.is_file() and allowed_file(p.name):
+                        items.append((p, cls))
     except Exception:
-        return False
+        items = []
+    if items:
+        random.shuffle(items)
+        chosen = items[: int(k)]
+        return pd.DataFrame([
+            {"filename": p.name, "path": str(p), "猫の種類": cls} for p, cls in chosen
+        ])
 
-# よくあるカスタム名の救済（必要に応じて追加）
-def _common_custom_objects():
+    # 2) フォールバック: selectimage.randomselect_df → /uploads 直下
+    df = None
     try:
-        import tensorflow as tf
-        from tensorflow.keras.layers import LeakyReLU
-        return {
-            "swish": tf.nn.swish,
-            "relu6": tf.nn.relu6,
-            "LeakyReLU": LeakyReLU,
-        }
+        from selectimage import randomselect_df  # type: ignore
+        df = randomselect_df(str(UPLOAD_DIR), k=int(k))
     except Exception:
-        return {}
+        df = None
+    if df is None or df.empty:
+        imgs = [p for p in UPLOAD_DIR.glob("**/*") if allowed_file(p.name)]
+        random.shuffle(imgs)
+        imgs = imgs[: int(k)]
+        df = pd.DataFrame([{"filename": p.name, "path": str(p)} for p in imgs])
+    if "猫の種類" not in df.columns:
+        choices = _answer_choices()
+        df["猫の種類"] = [
+            _infer_label_from_filename(str(fn), choices) for fn in df["filename"]
+        ]
+    return df
 
 # -------------------------------------------------
 # 高速化モデル読込
 # -------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def _load_model_once():
-    if not MODEL_PATH.exists():
+    try:
+        if not MODEL_PATH.exists():
+            return None
+        from tensorflow.keras.models import load_model  # type: ignore
+        return load_model(str(MODEL_PATH), compile=False)
+    except Exception:
         return None
-
-    # 1) tf.keras のローダ（古いH5互換に強い）
-    try:
-        from tensorflow.keras.models import load_model as tf_load_model
-        return tf_load_model(str(MODEL_PATH), compile=False)
-    except Exception as e1:
-        _record_model_error(e1)
-
-    # 2) tf.keras + よくある custom_objects（活性化・LeakyReLU など）
-    try:
-        from tensorflow.keras.models import load_model as tf_load_model
-        return tf_load_model(str(MODEL_PATH), compile=False, custom_objects=_common_custom_objects())
-    except Exception as e2:
-        _record_model_error(e2)
-
-    # 3) Keras 3 推奨API（安全モードOFFで Lambda/カスタム許可）
-    try:
-        import keras
-        return keras.saving.load_model(str(MODEL_PATH), compile=False, safe_mode=False)
-    except Exception as e3:
-        _record_model_error(e3)
-
-    return None
 
 def _load_labels():
     if LABELS_PATH.exists():
@@ -134,50 +157,206 @@ def _predict_fast_batch(paths: list[Path]) -> list[str]:
 
 def page_check():
     st.header("Check（画像推論）")
-    with st.form(key="check_form"):
-        uploaded_files = st.file_uploader("画像をアップロード（複数可）", type=["png","jpg","jpeg","webp"], accept_multiple_files=True)
-        save_to_uploads = st.checkbox("/uploads に保存する", value=True)
-        use_fast = st.checkbox("高速モード", value=True)
-        submitted = st.form_submit_button("推論を実行")
 
-    if submitted and uploaded_files:
-        file_paths = []
-        for uf in uploaded_files:
-            dst = UPLOAD_DIR / uf.name
-            dst.write_bytes(uf.getvalue())
-            file_paths.append(dst)
+    tab_multi, tab_single, tab_quiz = st.tabs([
+        "複数アップロード", "単発アップロード（Flask互換）", "対戦（クイズ）"
+    ])
 
-        rows = []
-        with st.spinner("推論中..."):
-            fast_available = use_fast and (_load_model_once() is not None)
-            if fast_available:
-                try:
-                    labels = _predict_fast_batch(file_paths)
-                    for p, lb in zip(file_paths, labels):
-                        rows.append({"filename": p.name, "label": lb, "mode": "fast"})
-                except Exception as e:
-                    st.info(f"高速モード失敗: {e}")
-                    fast_available = False
-            if not fast_available:
-                for p in file_paths:
-                    if predict is not None:
-                        try:
+    # --- 複数アップロード（既存まとめ推論） ---
+    with tab_multi:
+        with st.form(key="check_form_multi"):
+            uploaded_files = st.file_uploader(
+                "画像をアップロード（複数可）",
+                type=["png", "jpg", "jpeg", "webp", "gif"],
+                accept_multiple_files=True,
+            )
+            save_to_uploads = st.checkbox("/uploads に保存する", value=True)
+            use_fast = st.checkbox("高速モード", value=True)
+            submitted = st.form_submit_button("推論を実行")
+
+        if submitted and uploaded_files:
+            file_paths = []
+            for uf in uploaded_files:
+                dst = UPLOAD_DIR / uf.name
+                # 保存する/しないにかかわらず、一時配置（predictの引数で使う）
+                dst.write_bytes(uf.getvalue())
+                file_paths.append(dst)
+
+            rows = []
+            with st.spinner("推論中..."):
+                fast_available = use_fast and (_load_model_once() is not None)
+                if fast_available:
+                    try:
+                        labels = _predict_fast_batch(file_paths)
+                        for p, lb in zip(file_paths, labels):
+                            rows.append({"filename": p.name, "label": lb, "mode": "fast"})
+                    except Exception as e:
+                        st.info(f"高速モード失敗: {e}")
+                        fast_available = False
+                if not fast_available:
+                    for p in file_paths:
+                        if predict is not None:
                             try:
-                                out = predict(p.name)
-                            except Exception:
-                                out = predict(str(p))
-                            rows.append({"filename": p.name, "label": out, "mode": "fallback"})
-                        except Exception as e:
-                            rows.append({"filename": p.name, "label": None, "error": str(e)})
+                                try:
+                                    out = predict(p.name)
+                                except Exception:
+                                    out = predict(str(p))
+                                rows.append({"filename": p.name, "label": out, "mode": "fallback"})
+                            except Exception as e:
+                                rows.append({"filename": p.name, "label": None, "error": str(e)})
+                        else:
+                            rows.append({"filename": p.name, "label": "dummy_label"})
+            df = pd.DataFrame(rows)
+            st.dataframe(df, width="stretch")
+            st.subheader("プレビュー")
+            cols = st.columns(3)
+            for i, f in enumerate(uploaded_files):
+                with cols[i % 3]:
+                    st.image(f, caption=f.name, width="stretch")
+
+    # --- 単発アップロード（Flask: /api/v1/send 相当） ---
+    with tab_single:
+        c1, c2 = st.columns([3, 2])
+        with c1:
+            uf_single = st.file_uploader(
+                "画像を1枚アップロード",
+                type=["png", "jpg", "jpeg", "webp", "gif"],
+                accept_multiple_files=False,
+            )
+            use_fast_single = st.checkbox("高速モードで推論", value=True, key="use_fast_single")
+            run_single = st.button("アップロードして推論")
+        with c2:
+            st.caption("既存ファイルを使う（/uploads 内）")
+            existing = sorted([p for p in UPLOAD_DIR.glob("**/*") if allowed_file(p.name)])
+            pick = st.selectbox("ファイルを選択", ["（選択しない）"] + [p.name for p in existing])
+            run_pick = st.button("選択したファイルで推論")
+
+        target_path = None
+        target_name = None
+        if run_single and uf_single is not None:
+            if not allowed_file(uf_single.name):
+                st.error("許可されていない拡張子です")
+            else:
+                dst = UPLOAD_DIR / uf_single.name
+                dst.write_bytes(uf_single.getvalue())
+                target_path = dst
+                target_name = uf_single.name
+        elif run_pick and pick != "（選択しない）":
+            target_path = UPLOAD_DIR / pick
+            target_name = pick
+
+        if target_path is not None:
+            st.image(str(target_path), caption=target_name, width="stretch")
+            row = {"filename": target_name}
+            with st.spinner("推論中..."):
+                fast_available = use_fast_single and (_load_model_once() is not None)
+                try:
+                    if fast_available:
+                        label = _predict_fast_batch([target_path])[0]
+                        row.update({"label": label, "mode": "fast"})
                     else:
-                        rows.append({"filename": p.name, "label": "dummy_label"})
-        df = pd.DataFrame(rows)
-        st.dataframe(df, width="stretch")
-        st.subheader("プレビュー")
-        cols = st.columns(3)
-        for i, f in enumerate(uploaded_files):
-            with cols[i % 3]:
-                st.image(f, caption=f.name, width="stretch")
+                        if predict is not None:
+                            try:
+                                try:
+                                    out = predict(target_name)
+                                except Exception:
+                                    out = predict(str(target_path))
+                                row.update({"label": str(out), "mode": "fallback"})
+                            except Exception as e:
+                                row.update({"label": None, "error": str(e)})
+                        else:
+                            row.update({"label": "dummy_label"})
+                except Exception as e:
+                    row.update({"label": None, "error": str(e)})
+            st.write(pd.DataFrame([row]))
+
+    # --- 対戦（クイズ）: Flask index/check 相当 ---
+    with tab_quiz:
+        st.caption(f"validation_data（{VALIDATION_DIR}）配下の各ディレクトリ（=猫の種類）から画像をランダムに出題します。")
+        k = st.number_input("出題数", min_value=1, max_value=30, value=8, step=1)
+        colq1, colq2 = st.columns([1, 1])
+        with colq1:
+            if st.button("問題を作る"):
+                st.session_state["quiz_df"] = _make_quiz_df(int(k))
+                # 回答をリセット
+                dfq = st.session_state["quiz_df"]
+                for i in range(len(dfq)):
+                    st.session_state.pop(f"ans_{i}", None)
+        with colq2:
+            use_fast_quiz = st.checkbox("高速モードで採点", value=True)
+
+        dfq = st.session_state.get("quiz_df")
+        if isinstance(dfq, pd.DataFrame) and not dfq.empty:
+            choices = _answer_choices()
+            ans_list = ["（選択してください）"] + choices
+            cols = st.columns(4)
+            for i, row in dfq.reset_index(drop=True).iterrows():
+                img_path = row.get("path") or str(UPLOAD_DIR / row["filename"])  # type: ignore
+                with cols[i % 4]:
+                    st.image(img_path, caption=row["filename"], width="stretch")
+                    st.selectbox("あなたの答え", ans_list, key=f"ans_{i}")
+
+            if st.button("採点する"):
+                # 予測
+                paths = [Path(r.get("path") or (UPLOAD_DIR / r["filename"])) for _, r in dfq.iterrows()]
+                # AI 推論
+                ai_labels: list[str]
+                try:
+                    if use_fast_quiz and (_load_model_once() is not None):
+                        ai_labels = _predict_fast_batch(paths)
+                    else:
+                        ai_labels = []
+                        for p in paths:
+                            if predict is not None:
+                                try:
+                                    try:
+                                        out = predict(p.name)
+                                    except Exception:
+                                        out = predict(str(p))
+                                    ai_labels.append(str(out))
+                                except Exception:
+                                    ai_labels.append("?")
+                            else:
+                                ai_labels.append("dummy_label")
+                except Exception:
+                    ai_labels = ["?"] * len(paths)
+
+                # 正解（可能なら）
+                gt = []
+                for _, r in dfq.iterrows():
+                    g = r.get("猫の種類")
+                    if not g or pd.isna(g):
+                        g = _infer_label_from_filename(r["filename"], choices)
+                    gt.append(g)
+
+                your = [st.session_state.get(f"ans_{i}", "（選択してください）") for i in range(len(dfq))]
+
+                # 集計（正解が不明な行は除外）
+                eval_rows = [i for i, g in enumerate(gt) if g and g != "（選択してください）"]
+                correct_human = sum(1 for i in eval_rows if your[i] == gt[i])
+                correct_ai = sum(1 for i in eval_rows if ai_labels[i] == gt[i])
+
+                if correct_human > correct_ai:
+                    youwin = "あなたの勝ち"
+                elif correct_human == correct_ai:
+                    youwin = "引き分け"
+                else:
+                    youwin = "あなたの負け"
+
+                # 結果テーブル
+                disp = pd.DataFrame({
+                    "filename": [r["filename"] for _, r in dfq.iterrows()],
+                    "正解は": gt,
+                    "あなたの答え": your,
+                    "nyancheckの答え": ai_labels,
+                })
+                st.subheader("採点結果")
+                st.dataframe(disp, width="stretch")
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("あなたの正解数", correct_human)
+                m2.metric("AIの正解数", correct_ai)
+                m3.metric("判定", youwin)
 
 # ===============================
 # Select Image ページ
@@ -192,7 +371,7 @@ def page_select_image():
         run = st.form_submit_button("ランダム選択")
 
     if run:
-        imgs = [p for p in UPLOAD_DIR.glob("**/*") if p.suffix.lower() in (".png",".jpg",".jpeg",".webp")]
+        imgs = [p for p in UPLOAD_DIR.glob("**/*") if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif")]
         if randomselect is not None:
             try:
                 selected_paths = [Path(p) for p in randomselect(str(UPLOAD_DIR), int(num))]
@@ -239,65 +418,7 @@ with st.sidebar:
     st.title("NyanCheck")
     choice = st.radio("ページを選択", list(PAGES.keys()))
     st.markdown(f"**Upload dir**: `{UPLOAD_DIR}`")
-
-    # 現在のモデル状態を表示
-    _m = None
-    try:
-        _m = _load_model_once()
-    except Exception:
-        _m = None
-    st.caption("モデル: " + ("OK" if _m else "未検出"))
-
-    # 一時診断（トラブル時にだけ開けばOK）
-    st.divider()
-    with st.expander("Diagnostics (一時表示)"):
-        st.write("**MODEL_PATH**:", str(MODEL_PATH))
-        st.write("exists:", MODEL_PATH.exists())
-        st.write("parent exists:", MODEL_PATH.parent.exists())
-
-        try:
-            st.write("loadable (cache):", _m is not None)
-        except Exception as e:
-            st.write("loadable: False")
-            st.exception(e)
-
-        # predict.py の有無
-        st.write("predict.py available:", predict is not None)
-
-        # TensorFlow の存在確認（任意）
-        try:
-            import tensorflow as tf  # 重いので診断の中で遅延 import
-            st.write("tensorflow:", tf.__version__)
-        except Exception as e:
-            st.write("tensorflow import error:", e)
-
-        # results/ の中身を確認（空ならファイル未配置の可能性）
-        try:
-            from pathlib import Path as _Path
-            files = [str(p) for p in _Path(MODEL_PATH.parent).glob("*")]
-            st.write("results/ files:", files if files else "(empty)")
-        except Exception as e:
-            st.write("list error:", e)
-
-    st.divider()
-    with st.expander("Diagnostics (model loader)", expanded=False):
-        st.write("MODEL_PATH:", str(MODEL_PATH))
-        st.write("exists:", MODEL_PATH.exists(), "| is_dir:", MODEL_PATH.is_dir())
-        st.write("seems_hdf5:", _is_hdf5_file(MODEL_PATH))
-        st.write("loadable (cache):", _load_model_once() is not None)
-        if "model_load_error" in st.session_state:
-            st.write("last error:", st.session_state["model_load_error"])
-        if "model_load_trace" in st.session_state:
-            st.code(st.session_state["model_load_trace"])
-            
-    with st.expander("Diagnostics (model loader)", expanded=False):
-        st.write("MODEL_PATH:", str(MODEL_PATH))
-        st.write("exists:", MODEL_PATH.exists(), "| is_dir:", MODEL_PATH.is_dir())
-        st.write("seems_hdf5:", _is_hdf5_file(MODEL_PATH))
-        st.write("loadable (cache):", _load_model_once() is not None)
-        if "model_load_error" in st.session_state:
-            st.write("last error:", st.session_state["model_load_error"])
-        if "model_load_trace" in st.session_state:
-            st.code(st.session_state["model_load_trace"])
-
+    st.markdown(f"**Validation dir**: `{VALIDATION_DIR}`")
+    st.caption("validation_data: " + ("検出" if VALIDATION_DIR.exists() else "未検出"))
+    st.caption("モデル: " + ("OK" if _load_model_once() else "未検出"))
 PAGES[choice]()
