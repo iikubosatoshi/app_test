@@ -1,79 +1,56 @@
-import os
-import sqlite3
-import pandas as pd
-import numpy as np
-
-
-from flask import Blueprint, render_template, request, redirect, url_for, send_from_directory, session
-from werkzeug.utils import secure_filename
-#from nyancheck.net.predict import predict
-
-import glob
+# selectimage.py  — Streamlit/汎用向けの軽量版
+from __future__ import annotations
+from pathlib import Path
+from typing import Sequence
 import random
-import shutil
-import re
 
-selectimage_bp = Blueprint('selectimage', __name__, template_folder='templates', static_folder="./static", static_url_path="/static")
+def randomselect(
+    root_dir: str,
+    k: int = 10,
+    extensions: Sequence[str] = (".png", ".jpg", ".jpeg", ".webp"),
+    recursive: bool = True,
+    seed: int | None = None,
+) -> list[str]:
+    """
+    root_dir 以下から画像ファイルをランダムに k 枚選んで「フルパスの文字列リスト」を返す。
+    - extensions: 拾う拡張子（大文字小文字は自動で無視）
+    - recursive: 下位ディレクトリも探索するか
+    - seed: 乱数シード（テストや再現性が必要なときに指定）
+    """
+    root = Path(root_dir)
+    if not root.exists():
+        return []
 
-upload_dir = './uploads'
-allowed_extensions = set(['png', 'jpg', 'gif'])
-config = {}
-config['upload_dir'] = upload_dir
+    if seed is not None:
+        random.seed(seed)
 
+    # 拡張子を小文字化して比較
+    exts = tuple(e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions)
 
-# index.htmlの「画像選択」ボタン）がクリックされたときの処理
-#@selectimage_bp.route('/api/v1/randomselect', methods=['GET', 'POST'])
-def randomselect():
-   #if request.method == 'POST':
+    it = root.rglob("*") if recursive else root.glob("*")
+    files = [
+        p for p in it
+        if p.is_file()
+        and p.suffix.lower() in exts
+        and not p.name.startswith(".")            # 隠しファイル除外
+    ]
 
-   list=glob.glob('/Users/iikubo/Library/CloudStorage/OneDrive-KyushuUniversity/2_work/open_campus/battle/nyancheck/net/data/validation_data/*/*.jpg')
-   #print(list)
+    if not files:
+        return []
 
-   filenames = []
-   ans = []
-   img_url_n = []
-   nyan_types = []
+    # 必要枚数が総数以上なら、シャッフルして先頭 k
+    if k >= len(files):
+        random.shuffle(files)
+        return [str(p) for p in files[:k]]
 
-   shutil.rmtree(upload_dir)
-   os.mkdir(upload_dir)
-
-   #空のデータフレーム
-   df_image = pd.DataFrame()
-
-   for i in range(10):
-      data=random.choice(list)
-
-      #for image
-      filename=os.path.split(data)[1]
-      filenames.append(filename)
-      #shutil.copyfile(data, data1)
-
-      #for answer
-      subdirname = os.path.basename(os.path.dirname(data))
-      ans.append(subdirname)
-
-      shutil.copy(data, upload_dir)
-      img_url_n.append('/uploads/' + filename)
-      #nyan_types.append(predict(filename))
-
-      list_=[[i,filename,subdirname]]
-      df_new = pd.DataFrame(list_,columns=["ID", "filename", "猫の種類"])
-      df_image = pd.concat([df_image,df_new])
-
-   df_image.set_index("ID", inplace = True)
-   df_image=df_image.replace({"Abyssinian":"アビシニアン","american shorthair":"アメリカンショートヘアー","Dog":"犬","Egyptian Mau":"エジプシャンマウ","japanese cat":"日本猫","Maine Coon":"メインクーン","Norwegian Forest Cat":"ノルウェージャンフォレストキャット","Russian Blue":"ロシアンブルー"})
+    # 重複なしでランダム抽出
+    return [str(p) for p in random.sample(files, k)]
 
 
-   #df_image = pd.DataFrame(zippedList,
-   #                        columns=["filename", "answer"],
-   #                        index=["ID1", "ID2", "ID3", "ID4", "ID5", "ID6", "ID7", "ID8", "ID9", "ID10"])
-
-
-   #return render_template('index.html', img_url_n=img_url_n, filenames=filenames, anss=ans, nyan_types=nyan_types)
-   #return render_template('index.html', img_url_n=img_url_n, filenames=filenames, anss=ans)
-   return df_image
-
-
-   #else:
-   #   return redirect(url_for(''))
-
+# （任意）DataFrame が必要な旧コード互換のヘルパー
+def randomselect_df(root_dir: str, k: int = 10, **kwargs):
+    """選んだ画像の filename / path を DataFrame にして返す（旧Flaskテンプレ互換）"""
+    import pandas as pd
+    paths = randomselect(root_dir, k, **kwargs)
+    rows = [{"filename": Path(p).name, "path": p} for p in paths]
+    return pd.DataFrame(rows)
