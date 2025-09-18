@@ -1,266 +1,296 @@
 from __future__ import annotations
-import random
-from dataclasses import dataclass
 from typing import List, Tuple, Optional
-
 import streamlit as st
+import random
 
-# -----------------------------------------------------------------------------
-# Streamlit page config
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────
+# Page config
+# ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Othello (Reversi) - Streamlit", page_icon="♟️", layout="centered")
 
-# -----------------------------------------------------------------------------
-# Constants
-# -----------------------------------------------------------------------------
-EMPTY = 0
-BLACK = 1   # Black goes first
-WHITE = -1
-DIRS = [
-    (-1, -1), (-1, 0), (-1, 1),
-    (0, -1),          (0, 1),
-    (1, -1),  (1, 0), (1, 1),
-]
+# ─────────────────────────────────────────────────────────────
+# CSS（固定8×8・隙間ゼロ・直角マス）
+# ─────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+.block-container{padding-left:.5rem!important;padding-right:.5rem!important}
+.board-scroll{overflow-x:auto}
+.board-wrap{width:max-content;margin:0 auto}
+.board{display:grid;grid-template-columns:repeat(8,56px);grid-auto-rows:56px;gap:0}
+.cell{width:56px;height:56px;background:#1c7c2d;border:.25px solid #004400;border-radius:0;
+      box-shadow:inset 0 0 8px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center}
+.piece{border-radius:50%;width:54px;height:54px}
+.piece.black{background:#000;box-shadow:inset 0 0 6px rgba(255,255,255,.2)}
+.piece.white{background:#fff;border:1px solid #222;box-shadow:inset 0 0 6px rgba(0,0,0,.2)}
 
-# Positional weights (classic heuristic)
-WEIGHTS = [
-    [120, -20,  20,  5,  5, 20, -20, 120],
-    [-20, -40, -5, -5, -5, -5, -40, -20],
-    [ 20,  -5, 15,  3,  3, 15,  -5,  20],
-    [  5,  -5,  3,  3,  3,  3,  -5,   5],
-    [  5,  -5,  3,  3,  3,  3,  -5,   5],
-    [ 20,  -5, 15,  3,  3, 15,  -5,  20],
-    [-20, -40, -5, -5, -5, -5, -40, -20],
-    [120, -20, 20,  5,  5, 20, -20, 120],
-]
+form.mv{margin:0;padding:0}
+.mvbtn{width:56px;height:56px;margin:0;padding:0;cursor:pointer;background:#1c7c2d;
+       border:.25px solid #004400;border-radius:0;box-shadow:inset 0 0 8px rgba(0,0,0,.25);
+       line-height:1;font-size:32px;color:yellow;font-weight:bold}
+.mvbtn:focus,.mvbtn:focus-visible,.mvbtn:active{outline:none;background:#1c7c2d;border:.25px solid #004400;
+       box-shadow:inset 0 0 8px rgba(0,0,0,.25)}
+</style>
+""", unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-Board = List[List[int]]
-Move = Tuple[int, int]
+# ─────────────────────────────────────────────────────────────
+# 盤ロジック
+# ─────────────────────────────────────────────────────────────
+EMPTY, BLACK, WHITE = 0, 1, -1
+DIRS = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
+Board = list[list[int]]
+Move  = tuple[int,int]
 
-
-def new_board() -> Board:
-    b = [[EMPTY for _ in range(8)] for _ in range(8)]
-    b[3][3] = WHITE
-    b[3][4] = BLACK
-    b[4][3] = BLACK
-    b[4][4] = WHITE
+def new_board()->Board:
+    b=[[EMPTY]*8 for _ in range(8)]
+    b[3][3]=WHITE; b[3][4]=BLACK; b[4][3]=BLACK; b[4][4]=WHITE
     return b
 
+def in_bounds(r:int,c:int)->bool: return 0<=r<8 and 0<=c<8
+def opponent(p:int)->int: return -p
 
-def in_bounds(r: int, c: int) -> bool:
-    return 0 <= r < 8 and 0 <= c < 8
-
-
-def opponent(p: int) -> int:
-    return -p
-
-
-def find_flips(board: Board, r: int, c: int, p: int) -> List[Move]:
-    """Return list of discs to flip if (r,c) is played by p; empty if invalid."""
-    if board[r][c] != EMPTY:
-        return []
-    flips: List[Move] = []
-    for dr, dc in DIRS:
-        path: List[Move] = []
-        rr, cc = r + dr, c + dc
-        while in_bounds(rr, cc) and board[rr][cc] == opponent(p):
-            path.append((rr, cc))
-            rr += dr
-            cc += dc
-        if in_bounds(rr, cc) and board[rr][cc] == p and path:
-            flips.extend(path)
+def find_flips(board:Board,r:int,c:int,p:int)->list[Move]:
+    if board[r][c]!=EMPTY: return []
+    flips=[]
+    for dr,dc in DIRS:
+        path=[]; rr,cc=r+dr,c+dc
+        while in_bounds(rr,cc) and board[rr][cc]==opponent(p):
+            path.append((rr,cc)); rr+=dr; cc+=dc
+        if in_bounds(rr,cc) and board[rr][cc]==p and path: flips+=path
     return flips
 
+def valid_moves(board:Board,p:int)->list[Move]:
+    return [(r,c) for r in range(8) for c in range(8) if find_flips(board,r,c,p)]
 
-def valid_moves(board: Board, p: int) -> List[Move]:
-    moves: List[Move] = []
-    for r in range(8):
-        for c in range(8):
-            if find_flips(board, r, c, p):
-                moves.append((r, c))
-    return moves
-
-
-def apply_move(board: Board, move: Move, p: int) -> Board:
-    r, c = move
-    flips = find_flips(board, r, c, p)
-    if not flips:
-        return board
-    nb = [row[:] for row in board]
-    nb[r][c] = p
-    for rr, cc in flips:
-        nb[rr][cc] = p
+def apply_move(board:Board, mv:Move, p:int)->Board:
+    r,c=mv; flips=find_flips(board,r,c,p)
+    if not flips: return board
+    nb=[row[:] for row in board]; nb[r][c]=p
+    for rr,cc in flips: nb[rr][cc]=p
     return nb
 
+def score(board:Board)->tuple[int,int]:
+    b=sum(cell==BLACK for row in board for cell in row)
+    w=sum(cell==WHITE for row in board for cell in row)
+    return b,w
 
-def score(board: Board) -> Tuple[int, int]:
-    b = sum(cell == BLACK for row in board for cell in row)
-    w = sum(cell == WHITE for row in board for cell in row)
-    return b, w
+def game_over(board:Board)->bool:
+    return not valid_moves(board,BLACK) and not valid_moves(board,WHITE)
 
+# ─────────────────────────────────────────────────────────────
+# URLエンコード（セッション切れても継続）
+# ─────────────────────────────────────────────────────────────
+def encode_board(b:Board)->str:
+    m={EMPTY:'.', BLACK:'B', WHITE:'W'}
+    return ''.join(m[b[r][c]] for r in range(8) for c in range(8))
 
-def game_over(board: Board) -> bool:
-    return not valid_moves(board, BLACK) and not valid_moves(board, WHITE)
+def decode_board(s:str)->Board:
+    m={'.':EMPTY,'B':BLACK,'W':WHITE}
+    out=[[EMPTY]*8 for _ in range(8)]
+    if not s or len(s)!=64: return new_board()
+    k=0
+    for r in range(8):
+        for c in range(8):
+            out[r][c]=m.get(s[k],EMPTY); k+=1
+    return out
 
+def read_query():
+    try:
+        q=st.query_params
+        s=q.get("s",None); p=q.get("p",None); mv=q.get("mv",None)
+        s=s if isinstance(s,str) else (s[0] if s else None)
+        p=p if isinstance(p,str) else (p[0] if p else None)
+        mv=mv if isinstance(mv,str) else (mv[0] if mv else None)
+        return s,p,mv
+    except Exception:
+        q=st.experimental_get_query_params()
+        return q.get("s",[None])[0], q.get("p",[None])[0], q.get("mv",[None])[0]
 
-# -----------------------------------------------------------------------------
-# Simple AI
-# -----------------------------------------------------------------------------
+def set_query(s:Optional[str]=None, p:Optional[int]=None):
+    try:
+        st.query_params.clear()
+        params={}
+        if s is not None: params["s"]=s
+        if p is not None: params["p"]=str(p)
+        if params: st.query_params.update(params)
+    except Exception:
+        if s is None and p is None: st.experimental_set_query_params()
+        else:
+            args={}
+            if s is not None: args["s"]=s
+            if p is not None: args["p"]=str(p)
+            st.experimental_set_query_params(**args)
 
-def evaluate_move(board: Board, move: Move, p: int) -> int:
-    # combine flips count and positional weight
-    r, c = move
-    flips = len(find_flips(board, r, c, p))
-    posw = WEIGHTS[r][c]
-    return flips * 10 + posw
+# ─────────────────────────────────────────────────────────────
+# CPU 思考
+# ─────────────────────────────────────────────────────────────
+# Hard 用の位置評価
+WEIGHTS = [
+    [120,-20, 20,  5,  5, 20,-20,120],
+    [-20,-40, -5, -5, -5, -5,-40,-20],
+    [ 20, -5, 15,  3,  3, 15, -5, 20],
+    [  5, -5,  3,  3,  3,  3, -5,  5],
+    [  5, -5,  3,  3,  3,  3, -5,  5],
+    [ 20, -5, 15,  3,  3, 15, -5, 20],
+    [-20,-40, -5, -5, -5, -5,-40,-20],
+    [120,-20, 20,  5,  5, 20,-20,120],
+]
 
+def eval_board(b:Board, p:int)->int:
+    # 自石: +、相手: -
+    s=0
+    for r in range(8):
+        for c in range(8):
+            if b[r][c]==p: s+=WEIGHTS[r][c]
+            elif b[r][c]==opponent(p): s-=WEIGHTS[r][c]
+    return s
 
-def ai_pick_move(board: Board, p: int, level: str = "Normal") -> Optional[Move]:
-    moves = valid_moves(board, p)
-    if not moves:
-        return None
-    if level == "Easy":
+def cpu_pick(b:Board, p:int, level:str)->Optional[Move]:
+    moves=valid_moves(b,p)
+    if not moves: return None
+    if level=="Easy":
         return random.choice(moves)
-    # Normal/Hard: pick by heuristic; Hard gives extra bias to safe corners/edges
-    scored = []
-    for m in moves:
-        val = evaluate_move(board, m, p)
-        if level == "Hard":
-            r, c = m
-            # Encourage corners a lot, avoid X-squares next to corners
-            if (r, c) in [(0, 0), (0, 7), (7, 0), (7, 7)]:
-                val += 200
-            if (r, c) in [(1, 1), (1, 6), (6, 1), (6, 6)]:
-                val -= 50
-        scored.append((val, m))
-    scored.sort(reverse=True, key=lambda x: x[0])
-    return scored[0][1]
+    if level=="Medium":
+        # 返す枚数が最大の手
+        best=None; best_n=-1
+        for mv in moves:
+            n=len(find_flips(b,mv[0],mv[1],p))
+            if n>best_n: best_n=n; best=mv
+        return best
+    # Hard: 位置評価 + 着手後の eval を最大化
+    best=None; best_v=-10**9
+    for mv in moves:
+        nb=apply_move(b,mv,p)
+        v=eval_board(nb,p)
+        # 角優先の微調整（角なら大きく加点）
+        if mv in [(0,0),(0,7),(7,0),(7,7)]: v+=500
+        if v>best_v: best_v=v; best=mv
+    return best
 
+def cpu_auto_play():
+    """現在の設定でCPUの番なら、連続してCPUの手を適用（パス処理込み）。"""
+    b=st.session_state.board
+    p=st.session_state.player
+    human = st.session_state.human_side
+    level = st.session_state.cpu_level
+    changed=False
+    guard=0
+    while p != human and not game_over(b) and guard<4:  # 連続2パスで終局する想定で控えめループ
+        mv=cpu_pick(b,p,level)
+        if mv is None:
+            p=opponent(p)  # パス
+            if not valid_moves(b,p): break  # 連続パスで終局
+        else:
+            b=apply_move(b,mv,p)
+            p=opponent(p)
+            # 相手（人/CPU）がパスなら手番を戻す
+            if not valid_moves(b,p) and not game_over(b):
+                p=opponent(p)
+        changed=True; guard+=1
+    if changed:
+        st.session_state.board=b
+        st.session_state.player=p
+        set_query(encode_board(b), p)
 
-# -----------------------------------------------------------------------------
-# Session state
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────
+# 初期化（URL→復元 or 新規）
+# ─────────────────────────────────────────────────────────────
 if "board" not in st.session_state:
-    st.session_state.board = new_board()
-    st.session_state.player = BLACK
-    st.session_state.history: List[Tuple[Board, int]] = []  # (board, player)
-    st.session_state.human_color = BLACK  # by default human plays black
-    st.session_state.mode = "Human vs CPU"
-    st.session_state.level = "Normal"
+    st.session_state.board=new_board()
+    st.session_state.player=BLACK
+if "human_side" not in st.session_state:
+    st.session_state.human_side=BLACK
+if "cpu_level" not in st.session_state:
+    st.session_state.cpu_level="Hard"
 
-
-# -----------------------------------------------------------------------------
-# Sidebar controls
-# -----------------------------------------------------------------------------
-st.sidebar.title("Othello / Reversi")
-st.sidebar.caption("Streamlit example game. Black moves first.")
-
-st.session_state.mode = st.sidebar.selectbox("対戦モード", ["Human vs CPU", "Human vs Human"], index=0)
-if st.session_state.mode == "Human vs CPU":
-    st.session_state.human_color = BLACK if st.sidebar.radio("あなたの色", ["Black", "White"], index=0) == "Black" else WHITE
-    st.session_state.level = st.sidebar.select_slider("CPUレベル", options=["Easy", "Normal", "Hard"], value=st.session_state.level)
-
-col_a, col_b, col_c = st.sidebar.columns(3)
-if col_a.button("⟲ Undo"):
-    if st.session_state.history:
-        st.session_state.board, st.session_state.player = st.session_state.history.pop()
-
-if col_b.button("⟲ 2手戻す"):
-    for _ in range(2):
-        if st.session_state.history:
-            st.session_state.board, st.session_state.player = st.session_state.history.pop()
-
-if col_c.button("🆕 New Game"):
-    st.session_state.board = new_board()
-    st.session_state.player = BLACK
-    st.session_state.history.clear()
-
-show_valid = st.sidebar.checkbox("合法手のヒントを表示", value=True)
-
-# -----------------------------------------------------------------------------
-# Header & status
-# -----------------------------------------------------------------------------
-st.title("♟️ Othello (Reversi)")
-
-b_cnt, w_cnt = score(st.session_state.board)
-turn_str = "Black" if st.session_state.player == BLACK else "White"
-st.write(f"**Turn: {turn_str}**  |  ⚫ {b_cnt} - ⚪ {w_cnt}")
-
-# -----------------------------------------------------------------------------
-# Board rendering
-# -----------------------------------------------------------------------------
-
-def piece_emoji(cell: int) -> str:
-    if cell == BLACK:
-        return "⚫"
-    if cell == WHITE:
-        return "⚪"
-    return "🟩"  # empty square
-
-
-valid = set(valid_moves(st.session_state.board, st.session_state.player))
-
-
-def make_move(r: int, c: int):
-    board = st.session_state.board
-    p = st.session_state.player
-    flips = find_flips(board, r, c, p)
-    if not flips:
-        return
-    # push history
-    st.session_state.history.append(([row[:] for row in board], p))
-    st.session_state.board = apply_move(board, (r, c), p)
-    st.session_state.player = opponent(p)
-
-
-# Grid (8x8)
-for r in range(8):
-    cols = st.columns(8, gap="small")
-    for c in range(8):
-        label = piece_emoji(st.session_state.board[r][c])
-        if show_valid and (r, c) in valid and st.session_state.board[r][c] == EMPTY:
-            label = "🟢"  # hint for valid move
-        # Each square is a button; clicking attempts a move for current player
-        if cols[c].button(label, key=f"sq_{r}_{c}"):
-            make_move(r, c)
-
-# -----------------------------------------------------------------------------
-# Turn management & CPU move
-# -----------------------------------------------------------------------------
-cur = st.session_state.player
-if game_over(st.session_state.board):
-    b_cnt, w_cnt = score(st.session_state.board)
-    if b_cnt > w_cnt:
-        st.success(f"Game Over! Winner: Black  ({b_cnt} - {w_cnt})")
-    elif w_cnt > b_cnt:
-        st.success(f"Game Over! Winner: White  ({w_cnt} - {b_cnt})")
-    else:
-        st.info(f"Game Over! Draw  ({b_cnt} - {w_cnt})")
+s_q,p_q,mv_q=read_query()
+if s_q and p_q:
+    st.session_state.board=decode_board(s_q)
+    try: st.session_state.player=int(p_q)
+    except: st.session_state.player=BLACK
 else:
-    # If no legal moves, pass
-    if not valid_moves(st.session_state.board, cur):
-        st.info(f"{ 'Black' if cur == BLACK else 'White' } has no legal moves. Pass.")
-        st.session_state.player = opponent(cur)
+    set_query(encode_board(st.session_state.board), st.session_state.player)
 
-# CPU turn (after handling pass)
-cur = st.session_state.player
-if (
-    st.session_state.mode == "Human vs CPU"
-    and not game_over(st.session_state.board)
-    and ((st.session_state.human_color == BLACK and cur == WHITE) or (st.session_state.human_color == WHITE and cur == BLACK))
-):
-    moves = valid_moves(st.session_state.board, cur)
-    if moves:
-        mv = ai_pick_move(st.session_state.board, cur, level=st.session_state.level)
-        if mv is not None:
-            # save history
-            st.session_state.history.append(([row[:] for row in st.session_state.board], cur))
-            st.session_state.board = apply_move(st.session_state.board, mv, cur)
-            st.session_state.player = opponent(cur)
-            st.rerun()  # immediately reflect CPU move
+# ─────────────────────────────────────────────────────────────
+# 設定UI（上部）
+# ─────────────────────────────────────────────────────────────
+left, right = st.columns([1,1])
+with left:
+    side = st.radio("あなたの手番", options=["黒(先手)","白(後手)"], index=0 if st.session_state.human_side==BLACK else 1, horizontal=True)
+with right:
+    level = st.selectbox("CPUの強さ", options=["Easy","Medium","Hard"], index=["Easy","Medium","Hard"].index(st.session_state.cpu_level))
 
-# Footer
-st.caption("Built with Streamlit. Othello rules: capture lines by enclosing opponent discs.")
+if (side.startswith("黒") and st.session_state.human_side!=BLACK) or (side.startswith("白") and st.session_state.human_side!=WHITE) or (level!=st.session_state.cpu_level):
+    st.session_state.human_side = BLACK if side.startswith("黒") else WHITE
+    st.session_state.cpu_level = level
+    # 盤面を初期化して設定反映
+    st.session_state.board = new_board()
+    st.session_state.player = BLACK
+    set_query(encode_board(st.session_state.board), st.session_state.player)
+
+# ─────────────────────────────────────────────────────────────
+# クリック（mv）が来ていたら適用 → 必要ならCPUを自動実行
+# ─────────────────────────────────────────────────────────────
+if mv_q:
+    try:
+        r,c = map(int, mv_q.split("_"))
+        b=st.session_state.board; p=st.session_state.player
+        if (r,c) in valid_moves(b,p):
+            b2=apply_move(b,(r,c),p); p2=opponent(p)
+            if not valid_moves(b2,p2) and not game_over(b2):  # 相手がパス
+                p2=opponent(p2)
+            st.session_state.board=b2; st.session_state.player=p2
+            set_query(encode_board(b2), p2)
+            # ユーザーの手の後にCPU番なら自動思考
+            cpu_auto_play()
+    except Exception:
+        set_query(encode_board(st.session_state.board), st.session_state.player)
+
+# ユーザーが後手を選んでいて、ゲーム開始直後にCPU番の場合（ページロード時）
+if st.session_state.player != st.session_state.human_side and not game_over(st.session_state.board):
+    cpu_auto_play()
+
+# ─────────────────────────────────────────────────────────────
+# UI（スコアと盤）
+# ─────────────────────────────────────────────────────────────
+b_cnt,w_cnt=score(st.session_state.board)
+st.write(f"⚫ {b_cnt} - ⚪ {w_cnt}")
+st.write(f"Turn: {'Black' if st.session_state.player==BLACK else 'White'}")
+
+board=st.session_state.board
+valid=set(valid_moves(board, st.session_state.player))
+human=st.session_state.human_side
+
+# 盤HTML（人の番の合法手=フォーム、その他は静的div）
+cells=[]
+s_now=encode_board(board); p_now=st.session_state.player
+for r in range(8):
+    for c in range(8):
+        if p_now==human and (r,c) in valid and board[r][c]==EMPTY:
+            cells.append(
+                f"<form class='mv' method='get' target='_self'>"
+                f"  <input type='hidden' name='mv' value='{r}_{c}'/>"
+                f"  <input type='hidden' name='s'  value='{s_now}'/>"
+                f"  <input type='hidden' name='p'  value='{p_now}'/>"
+                f"  <button class='mvbtn' type='submit' title='Move {r+1},{c+1}'>◎</button>"
+                f"</form>"
+            )
+        else:
+            v=board[r][c]
+            if v==BLACK: cells.append("<div class='cell'><div class='piece black'></div></div>")
+            elif v==WHITE: cells.append("<div class='cell'><div class='piece white'></div></div>")
+            else: cells.append("<div class='cell'></div>")
+
+html = "<div class='board-scroll'><div class='board-wrap'><div class='board'>" + "".join(cells) + "</div></div></div>"
+st.markdown(html, unsafe_allow_html=True)
+
+# 終局・操作
+if game_over(st.session_state.board):
+    b_cnt,w_cnt=score(st.session_state.board)
+    if b_cnt>w_cnt: st.success(f"Game Over! Winner: Black ({b_cnt}-{w_cnt})")
+    elif w_cnt>b_cnt: st.success(f"Game Over! Winner: White ({w_cnt}-{b_cnt})")
+    else: st.info(f"Game Over! Draw ({b_cnt}-{w_cnt})")
+
+if st.button("New Game"):
+    st.session_state.board=new_board()
+    st.session_state.player=BLACK
+    set_query(encode_board(st.session_state.board), st.session_state.player)

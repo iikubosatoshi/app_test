@@ -5,5 +5,5 @@ fileWatcherType = "poll"
 
 #（任意）Cloud向け: 自動リロード
 runOnSave = true
-headless   = true
+headless   = false
 
