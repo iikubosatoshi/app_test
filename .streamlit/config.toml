@@ -1,9 +1,9 @@
 # .streamlit/config.toml
 [server]
-# inotify制限回避（watchdog→poll）
-fileWatcherType = "poll"
+headless = true
+port = 8501
+enableCORS = false
 
-#（任意）Cloud向け: 自動リロード
-runOnSave = true
-headless   = false
+[browser]
+gatherUsageStats = false
 
