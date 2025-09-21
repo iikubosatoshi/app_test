@@ -12,11 +12,11 @@ st.set_page_config(page_title="NyanCheck", page_icon="🐾", layout="wide")
 # -------------------------------------------------
 # 環境設定
 # -------------------------------------------------
-UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "./uploads")).resolve()
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "./nyancheck/uploads")).resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-VALIDATION_DIR = Path(os.environ.get("VALIDATION_DIR", "./validation_data")).resolve()
-MODEL_PATH = Path("results/nyancheck.h5").resolve()
-LABELS_PATH = Path("results/labels.txt").resolve()
+VALIDATION_DIR = Path(os.environ.get("VALIDATION_DIR", "./nyancheck/validation_data")).resolve()
+MODEL_PATH = Path("nyancheck/results/nyancheck.h5").resolve()
+LABELS_PATH = Path("nyancheck/results/labels.txt").resolve()
 TARGET_SIZE = (200, 150)
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
