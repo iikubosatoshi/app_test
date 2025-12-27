@@ -1,0 +1,84 @@
+courses:
+  material:
+    label: 物質材料コース
+    graduation:
+      min_credits:
+        kikan_total: 48.5
+        senko_total: 86
+        senko_required: 66
+        senko_elective: 20
+        overall_total: 134.5
+
+      # ★追加：CSVのラベル名で「必修/選択」を合算するための集合
+      label_sets:
+        required_labels:
+          - 工学部共通科目
+          - Ⅱ群共通科目
+          - 学科共通科目（必修）
+          - 学科共通科目（必修選択）
+          - 物質材料コース科目（必修）
+          - 実験・演習科目（必修）
+          - その他必修
+          - 卒業研究
+        elective_labels:
+          - 学科共通科目（選択）
+          - 学科共通科目（選択）  # もし表記揺れがあれば追加
+          - 物質材料コース科目（選択）
+          - コース選択
+
+      elective_required_groups:
+        - label: 学科共通 選択必修（2単位）
+          min_credits: 2
+          courses:
+            - 常微分方程式とラプラス変換
+            - 化学反応論Ⅰ
+            - 化学反応論Ⅱ
+
+    thesis_start:
+      min_credits:
+        kikan_total: 48.5
+        senko_excluding_4th_year: 74
+      constraints:
+        required_labs_exercises_all_passed: true
+        required_missing_credits_max: 4
+
+  mech_elec:
+    label: 機械電気コース
+    graduation:
+      min_credits:
+        kikan_total: 45.5
+        senko_total: 89
+        senko_required: 58
+        senko_elective: 31
+        overall_total: 134.5
+
+      # ★追加
+      label_sets:
+        required_labels:
+          - 工学部共通科目
+          - Ⅲ群共通科目
+          - 学科共通科目（必修）
+          - 学科共通科目（必修選択）
+          - 機械電気コース科目（必修）
+          - 実験・演習科目
+          - その他必修
+          - 卒業研究
+        elective_labels:
+          - 学科共通科目（選択）
+          - 機械電気コース科目（選択）
+          - コース選択
+
+      elective_required_groups:
+        - label: 学科共通 選択必修（2単位）
+          min_credits: 2
+          courses:
+            - フーリエ解析と偏微分方程式
+            - エネルギー変換工学
+
+    thesis_start:
+      min_credits:
+        kikan_total: 45.5
+        senko_excluding_4th_year: 74
+      constraints:
+        required_labs_exercises_all_passed: true
+        required_missing_credits_max: 4
