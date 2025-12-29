@@ -362,7 +362,7 @@ def judge_thesis_start_from_row(
 # =========================================================
 
 DISPLAY_COLS_BASE = [
-    "学籍番号",
+    "ID",
     "氏名",
     "学年",
     "コース",
@@ -398,7 +398,7 @@ DISPLAY_COLS_THESIS = [
 ]
 
 RENAME_MAP = {
-    "学籍番号": "学籍番号",
+    "ID": "ID（学籍番号 or 仮ID）",
     "氏名": "氏名",
     "学年": "学年",
     "コース": "コース",
@@ -586,6 +586,8 @@ with tab_batch:
 
         # Student rows
         students = df[df["ヘッダFLG"] != 1].copy()
+        students = students.reset_index(drop=True)
+        students["student_id"] = students.index.map(lambda i: f"anon_{i+1:06d}")
 
         # master
         master = load_master(master_path)
@@ -601,8 +603,15 @@ with tab_batch:
             if ck is None:
                 ck = "unknown"
 
-            sid = row.get("学籍番号", "")
-            name = row.get("氏名", "")
+            sid_raw = row.get("学籍番号", "")
+            sid = "" if pd.isna(sid_raw) else str(sid_raw).strip()
+            
+            # 学籍番号が空なら仮IDを使う
+            if sid == "":
+                sid = str(row.get("student_id", "")).strip()
+            
+            name_raw = row.get("氏名", "")
+            name = "" if pd.isna(name_raw) else str(name_raw).strip()
             curriculum = row.get("カリキュラム略称", "")
             dept = row.get("所属略称", "")
 
@@ -684,7 +693,7 @@ with tab_batch:
             lack_summary = " / ".join(lack_parts) if lack_parts else ""
 
             base_row = {
-                "学籍番号": sid,
+                "ID": sid,  # 学籍番号 or anon_...
                 "氏名": name,
                 "学年": int(grade),
                 "コース": {"material": "物質材料", "mech_elec": "機械電気"}.get(ck, "不明"),
@@ -694,7 +703,7 @@ with tab_batch:
                 "所属略称": dept,
                 "カリキュラム略称": curriculum,
             }
-
+            
             # metrics を列化（主要集計値＋未修得リスト等）
             # ※ 列数が増えるので、必要ならこのブロックをコメントアウトしてもOK
             metrics_row = {}
@@ -729,7 +738,7 @@ with tab_batch:
         else:
             display_df_view = display_df
         
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df_view, use_container_width=True)
 
         # ダウンロード
         csv_bytes = result_df.to_csv(index=False).encode(CSV_ENCODING)
