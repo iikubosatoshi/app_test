@@ -44,19 +44,48 @@ def read_room_to_lab_from_xlsx(xlsx_bytes: bytes, sheet_name: str) -> Dict[Any, 
     return room_to_lab
 
 
-def read_power_csv_to_rows(
-    csv_bytes: bytes,
-    encoding: str,
-) -> List[List[Any]]:
-    """CSVを読み込み、行配列（list of list）として返す。元コード同様、先頭ヘッダ行はスキップ。"""
+def read_power_csv_to_rows(csv_bytes: bytes, encoding: str) -> List[List[Any]]:
+    """
+    先頭に空行（カンマだけの行）やメタ行があっても壊れない読み取り。
+    想定フォーマット（例）:
+      - 空行（,,,,）
+      - メタ行（log_xxx.csv, ...）
+      - ラベル行（先頭空で、"1LP-DK-2 電灯" など）
+      - 単位行（年月,kWh,kWh,...）  ← これを基準にする
+      - データ行（2025年1月, ...）
+    戻り値は「ラベル行」から下（ラベル行+単位行+データ行）を返す。
+    """
     text = csv_bytes.decode(encoding, errors="replace")
     reader = csv.reader(io.StringIO(text))
-    try:
-        next(reader)  # Skipping head-line
-    except StopIteration:
-        return []
-    return [row for row in reader]
 
+    all_rows = []
+    for row in reader:
+        # 行全体が空（カンマだけ等）なら捨てる
+        if not row or all((c is None) or (str(c).strip() == "") for c in row):
+            continue
+        all_rows.append(row)
+
+    if not all_rows:
+        return []
+
+    # 「年月」行を探す（これが単位行の先頭列）
+    ym_idx = None
+    for i, row in enumerate(all_rows):
+        if len(row) >= 1 and str(row[0]).strip() == "年月":
+            ym_idx = i
+            break
+
+    # 「年月」行が見つかった場合：その1つ上がラベル行（部屋番号/名称が並ぶ行）である前提
+    if ym_idx is not None:
+        start = max(ym_idx - 1, 0)  # ラベル行
+        return all_rows[start:]
+
+    # 見つからない場合のフォールバック：
+    # 先頭が "log_" を含むメタ行を1行だけ飛ばす（あるなら）
+    if "log_" in str(all_rows[0][0]):
+        return all_rows[1:]
+
+    return all_rows
 
 def write_rows_to_workbook_sheet_as_in_original(
     wb: Workbook,
@@ -265,6 +294,14 @@ def build_output_excel_bytes(
     wb.remove(default_ws)
 
     write_rows_to_workbook_sheet_as_in_original(wb, rows, DEFAULT_OUTPUT_DATA_SHEET)
+    
+    # 取り込んだ PowerConsum のヘッダ正規化：
+    # 1行目が空なら、2行目/3行目のどちらかをヘッダ扱いにする（ケース対応）
+    ws = wb[DEFAULT_OUTPUT_DATA_SHEET]
+    if ws.cell(1, 2).value is None:
+        # 2行目がメタ（log_...）なら3行目をヘッダに寄せる、など
+        # ここでは「1行目が空」なら「2行目を1行目へ繰り上げ」する例
+        ws.delete_rows(1)
 
     # 水道列削除（Ver14）
     delete_water_columns_like_v14(wb[DEFAULT_OUTPUT_DATA_SHEET])
