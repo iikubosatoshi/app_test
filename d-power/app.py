@@ -187,25 +187,21 @@ def calc_total_power_and_cost(
     price_yen_per_kwh: float,
     target_sheet_names: List[str] | None = None,
 ) -> pd.DataFrame:
-    """
-    研究室シート（= 研究室名のシート）ごとに、2列目以降・3行目以降の合計を集計。
-    TotalPower シートも作る。
-    """
-    # PowerConsum や TotalPower などの管理シートを除外
+    # 管理用シートを除外
     exclude = {DEFAULT_OUTPUT_DATA_SHEET, TOTAL_SHEET_NAME, "Sheet"}
     candidate = [s for s in wb.sheetnames if s not in exclude]
 
     if target_sheet_names is None:
         targets = candidate
     else:
-        # 指定があればその範囲に絞る（存在するものだけ）
         targets = [s for s in target_sheet_names if s in wb.sheetnames and s not in exclude]
 
     records = []
     for sh in targets:
         ws = wb[sh]
         power = 0.0
-        # 2列目以降、3行目以降
+
+        # 2列目以降、3行目以降の合計
         for col in ws.iter_cols(min_col=2, min_row=3):
             for cell in col:
                 if cell.value is None:
@@ -213,26 +209,39 @@ def calc_total_power_and_cost(
                 try:
                     power += float(cell.value)
                 except Exception:
-                    # 数値化できないものは無視（元コードは基本floatで入る想定）
                     continue
 
         cost = power * float(price_yen_per_kwh)
-        records.append({"研究室": sh, "使用量(kWh)": power, "単価(円/kWh)": float(price_yen_per_kwh), "料金(円)": cost})
+        records.append({
+            "研究室": sh,
+            "使用量(kWh)": power,
+            "単価(円/kWh)": float(price_yen_per_kwh),
+            "料金(円)": cost,
+        })
 
-    df = pd.DataFrame(records).sort_values("料金(円)", ascending=False).reset_index(drop=True)
+    # ★ここが重要：空でも列を固定して作る
+    cols = ["研究室", "使用量(kWh)", "単価(円/kWh)", "料金(円)"]
+    df = pd.DataFrame(records, columns=cols)
 
-    # TotalPower シートを書き換え
+    # ★空なら sort しない
+    if not df.empty:
+        df = df.sort_values("料金(円)", ascending=False).reset_index(drop=True)
+
+    # TotalPower シートを書き換え（空でもヘッダだけ作る）
     if TOTAL_SHEET_NAME in wb.sheetnames:
-        ws_old = wb[TOTAL_SHEET_NAME]
-        wb.remove(ws_old)
+        wb.remove(wb[TOTAL_SHEET_NAME])
     ws_total = wb.create_sheet(title=TOTAL_SHEET_NAME)
 
-    ws_total.append(["研究室", "使用量(kWh)", "単価(円/kWh)", "料金(円)"])
+    ws_total.append(cols)
     for _, r in df.iterrows():
-        ws_total.append([r["研究室"], float(r["使用量(kWh)"]), float(r["単価(円/kWh)"]), float(r["料金(円)"])])
+        ws_total.append([
+            r["研究室"],
+            float(r["使用量(kWh)"]),
+            float(r["単価(円/kWh)"]),
+            float(r["料金(円)"]),
+        ])
 
     return df
-
 
 def build_output_excel_bytes(
     mapping_xlsx_bytes: bytes,
