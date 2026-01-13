@@ -216,7 +216,6 @@ def calc_total_power_and_cost(
     price_yen_per_kwh: float,
     target_sheet_names: List[str] | None = None,
 ) -> pd.DataFrame:
-    # 管理用シートを除外
     exclude = {DEFAULT_OUTPUT_DATA_SHEET, TOTAL_SHEET_NAME, "Sheet"}
     candidate = [s for s in wb.sheetnames if s not in exclude]
 
@@ -225,12 +224,16 @@ def calc_total_power_and_cost(
     else:
         targets = [s for s in target_sheet_names if s in wb.sheetnames and s not in exclude]
 
-    records = []
+    labs = []
+    powers = []
+    power_units = []
+    costs = []
+    cost_units = []
+
     for sh in targets:
         ws = wb[sh]
         power = 0.0
 
-        # 2列目以降、3行目以降の合計
         for col in ws.iter_cols(min_col=2, min_row=3):
             for cell in col:
                 if cell.value is None:
@@ -240,38 +243,32 @@ def calc_total_power_and_cost(
                 except Exception:
                     continue
 
-        cost = power * float(price_yen_per_kwh)
-        records.append({
-            "研究室": sh,
-            "使用量(kWh)": power,
-            "単価(円/kWh)": float(price_yen_per_kwh),
-            "料金(円)": cost,
-        })
+        labs.append(sh)
+        powers.append(power)
+        power_units.append("kWh")
+        costs.append(power * float(price_yen_per_kwh))
+        cost_units.append("Yen")
 
-    # ★ここが重要：空でも列を固定して作る
-    cols = ["研究室", "使用量(kWh)", "単価(円/kWh)", "料金(円)"]
-    df = pd.DataFrame(records, columns=cols)
-
-    # ★空なら sort しない
-    if not df.empty:
-        df = df.sort_values("料金(円)", ascending=False).reset_index(drop=True)
-
-    # TotalPower シートを書き換え（空でもヘッダだけ作る）
+    # ===== Excel: 横書き TotalPower =====
     if TOTAL_SHEET_NAME in wb.sheetnames:
         wb.remove(wb[TOTAL_SHEET_NAME])
     ws_total = wb.create_sheet(title=TOTAL_SHEET_NAME)
 
-    ws_total.append(cols)
-    for _, r in df.iterrows():
-        ws_total.append([
-            r["研究室"],
-            float(r["使用量(kWh)"]),
-            float(r["単価(円/kWh)"]),
-            float(r["料金(円)"]),
-        ])
+    ws_total.append(labs)
+    ws_total.append(power_units)
+    ws_total.append(powers)
+    ws_total.append(cost_units)
+    ws_total.append(costs)
+
+    # ===== UI表示用 DataFrame（縦） =====
+    df = pd.DataFrame({
+        "研究室": labs,
+        "使用量(kWh)": powers,
+        "料金(円)": costs,
+    }).sort_values("料金(円)", ascending=False).reset_index(drop=True)
 
     return df
-
+    
 def build_output_excel_bytes(
     mapping_xlsx_bytes: bytes,
     power_csv_bytes: bytes,
