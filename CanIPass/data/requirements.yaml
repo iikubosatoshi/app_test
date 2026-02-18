@@ -1,6 +1,17 @@
+term_order:
+  前期集中: 1
+  春学期: 2
+  夏学期: 3
+  後期集中: 4
+  秋学期: 5
+  冬学期: 6
+  前: 2
+  後: 5
+
 courses:
   material:
     label: 物質材料コース
+
     graduation:
       min_credits:
         kikan_total: 48.5
@@ -9,7 +20,8 @@ courses:
         senko_elective: 20
         overall_total: 134.5
 
-      # ★追加：CSVのラベル名で「必修/選択」を合算するための集合
+      # 新データ（4年・物質材料）ヘッダに合わせる
+      # 「専攻教育（必修）」「専攻教育（選択）」を合算するためのラベル集合
       label_sets:
         required_labels:
           - 工学部共通科目
@@ -22,8 +34,6 @@ courses:
           - 卒業研究
         elective_labels:
           - 学科共通科目（選択）
-          - 学科共通科目（選択）  # もし表記揺れがあれば追加
-          - 物質材料コース科目（選択）
           - コース選択
 
       elective_required_groups:
@@ -44,6 +54,7 @@ courses:
 
   mech_elec:
     label: 機械電気コース
+
     graduation:
       min_credits:
         kikan_total: 45.5
@@ -52,7 +63,7 @@ courses:
         senko_elective: 31
         overall_total: 134.5
 
-      # ★追加
+      # 新データ（3年・機械電気）ヘッダに合わせる
       label_sets:
         required_labels:
           - 工学部共通科目
@@ -65,7 +76,6 @@ courses:
           - 卒業研究
         elective_labels:
           - 学科共通科目（選択）
-          - 機械電気コース科目（選択）
           - コース選択
 
       elective_required_groups:
